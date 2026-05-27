@@ -1,0 +1,6 @@
+{
+  "name": "PlannerPro",
+  "description": "A productivity app combining time-blocking, flexible tasks, and categorized notes with Google Calendar and Firebase sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
