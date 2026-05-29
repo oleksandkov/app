@@ -19,9 +19,12 @@ import androidx.room.PrimaryKey
 )
 data class NoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val userId: String = "",
     val title: String,
     val content: String,
     val categoryId: Int?, 
     val reminderTime: Long? = null,
+    val linkedDate: Long? = null,
+    val linkedMeetingId: String? = null,
     val updatedAt: Long = System.currentTimeMillis()
 )

@@ -1,0 +1,34 @@
+{
+  "project_info": {
+    "project_number": "948511050671",
+    "project_id": "planit-app-94851",
+    "storage_bucket": "planit-app-94851.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:948511050671:android:e3a89be432f9cb",
+        "android_client_info": {
+          "package_name": "com.aistudio.plannerpro.abxyzk"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "948511050671-hapsdb912mfm3i2k8prnm8qqt1b4dkqu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyFakeKeyForInitialInitializationNeeds"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "status": 1
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

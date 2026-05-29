@@ -10,14 +10,20 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TaskDao {
-    @Query("SELECT * FROM tasks WHERE date >= :startOfDay AND date <= :endOfDay ORDER BY startTime ASC")
-    fun getTasksForDate(startOfDay: Long, endOfDay: Long): Flow<List<TaskEntity>>
+    @Query("SELECT * FROM tasks WHERE userId = :userId AND ((date >= :startOfDay AND date <= :endOfDay) OR date = 0) ORDER BY date ASC, startTime ASC")
+    fun getTasksForDate(userId: String, startOfDay: Long, endOfDay: Long): Flow<List<TaskEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTask(task: TaskEntity): Long
 
     @Update
     suspend fun updateTask(task: TaskEntity)
+
+    @Query("SELECT * FROM tasks WHERE id = :id")
+    suspend fun getTaskById(id: Int): TaskEntity?
+
+    @Query("SELECT * FROM tasks WHERE userId = :userId ORDER BY date ASC, startTime ASC")
+    fun getAllTasks(userId: String): Flow<List<TaskEntity>>
 
     @Query("DELETE FROM tasks WHERE id = :id")
     suspend fun deleteTaskById(id: Int)

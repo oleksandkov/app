@@ -12,6 +12,9 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.tasks.await
 import java.security.MessageDigest
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 class AuthManager(
@@ -29,7 +32,7 @@ class AuthManager(
             val hashedNonce = digest.fold("") { str, it -> str + "%02x".format(it) }
 
             // Replace with your Web client ID from Google Cloud Console
-            val serverClientId = "YOUR_WEB_CLIENT_ID" 
+            val serverClientId = com.example.BuildConfig.WEB_CLIENT_ID 
 
             val googleIdOption = GetGoogleIdOption.Builder()
                 .setFilterByAuthorizedAccounts(false)
@@ -45,9 +48,15 @@ class AuthManager(
             handleSignInResult(result)
         } catch (e: GetCredentialException) {
             e.printStackTrace()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Google Sign-In Credential Error: ${e.message} (Code: ${e.type})", Toast.LENGTH_LONG).show()
+            }
             false
         } catch (e: Exception) {
             e.printStackTrace()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Google Sign-In Error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
             false
         }
     }

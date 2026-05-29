@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import androidx.compose.ui.graphics.Color
 
 private val LightColorScheme = lightColorScheme(
     primary = Indigo600,
@@ -28,7 +29,18 @@ private val LightColorScheme = lightColorScheme(
     onSurface = Slate900,
 )
 
-private val DarkColorScheme = LightColorScheme
+private val DarkColorScheme = darkColorScheme(
+    primary = Indigo400,
+    secondary = Purple500,
+    tertiary = Indigo500,
+    background = Color(0xFF0F172A),
+    surface = Color(0xFF1E293B),
+    onPrimary = Color(0xFF0F172A),
+    onSecondary = Color(0xFF0F172A),
+    onTertiary = Color(0xFF0F172A),
+    onBackground = Color.White,
+    onSurface = Color.White,
+)
 
 @Composable
 fun MyApplicationTheme(
@@ -36,6 +48,7 @@ fun MyApplicationTheme(
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
+    ThemeState.isDark = darkTheme
     val colorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current

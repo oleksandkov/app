@@ -10,11 +10,14 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NoteDao {
-    @Query("SELECT * FROM notes ORDER BY updatedAt DESC")
-    fun getAllNotes(): Flow<List<NoteEntity>>
+    @Query("SELECT * FROM notes WHERE userId = :userId ORDER BY updatedAt DESC")
+    fun getAllNotes(userId: String): Flow<List<NoteEntity>>
 
-    @Query("SELECT * FROM notes WHERE categoryId = :categoryId ORDER BY updatedAt DESC")
-    fun getNotesByCategory(categoryId: Int): Flow<List<NoteEntity>>
+    @Query("SELECT * FROM notes WHERE userId = :userId AND categoryId = :categoryId ORDER BY updatedAt DESC")
+    fun getNotesByCategory(userId: String, categoryId: Int): Flow<List<NoteEntity>>
+
+    @Query("SELECT * FROM notes WHERE userId = :userId AND linkedDate >= :startOfDay AND linkedDate <= :endOfDay ORDER BY updatedAt DESC")
+    fun getNotesForDate(userId: String, startOfDay: Long, endOfDay: Long): Flow<List<NoteEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNote(note: NoteEntity): Long

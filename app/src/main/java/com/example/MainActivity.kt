@@ -5,32 +5,24 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,15 +33,52 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.data.local.entity.TaskEntity
 import com.example.ui.theme.*
+import androidx.compose.ui.platform.LocalContext
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.launch
+import android.widget.Toast
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        try {
+            if (com.google.firebase.FirebaseApp.getApps(this).isEmpty()) {
+                val options = com.google.firebase.FirebaseOptions.Builder()
+                    .setApiKey("AIzaSyFakeKeyForInitialInitializationNeeds")
+                    .setApplicationId("1:948511050671:android:e3a89be432f9cb")
+                    .setProjectId("planit-app-94851")
+                    .build()
+                com.google.firebase.FirebaseApp.initializeApp(this, options)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            val requestPermissionLauncher = registerForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+            ) { _ -> }
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    this,
+                    "android.permission.POST_NOTIFICATIONS"
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissionLauncher.launch("android.permission.POST_NOTIFICATIONS")
+            }
+        }
+
         setContent {
-            MyApplicationTheme {
+            val settingsViewModel: com.example.settings.SettingsViewModel = viewModel()
+            val themeMode by settingsViewModel.themeMode.collectAsStateWithLifecycle()
+            val darkTheme = when (themeMode) {
+                "light" -> false
+                "dark" -> true
+                else -> androidx.compose.foundation.isSystemInDarkTheme()
+            }
+            MyApplicationTheme(darkTheme = darkTheme) {
                 MainAppNavigation()
             }
         }
@@ -59,10 +88,14 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainAppNavigation() {
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = "login") {
+    val currentUser = remember { FirebaseAuth.getInstance().currentUser }
+    val startDestination = if (currentUser != null) "main" else "login"
+
+    NavHost(navController = navController, startDestination = startDestination) {
         composable("login") { LoginScreen(navController) }
         composable("main") { 
             MainDashboardScreen(onSignOut = {
+                FirebaseAuth.getInstance().signOut()
                 navController.navigate("login") {
                     popUpTo(0) { inclusive = true }
                 }
@@ -73,8 +106,21 @@ fun MainAppNavigation() {
 
 @Composable
 fun LoginScreen(navController: NavHostController) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val auth: FirebaseAuth = remember { FirebaseAuth.getInstance() }
+    val authManager: com.example.auth.AuthManager = remember { com.example.auth.AuthManager(context, auth) }
+
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var isRegistering by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
+
     Column(
-        modifier = Modifier.fillMaxSize().background(AppBackground).padding(24.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AppBackground)
+            .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -85,26 +131,127 @@ fun LoginScreen(navController: NavHostController) {
             modifier = Modifier.size(80.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Text("Welcome to Planner Pro", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Slate900)
+        Text(
+            text = if (isRegistering) "Create Account" else "Welcome to PlanIt",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            color = Slate900
+        )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            "Sign in to sync your Google Calendar and keep your tasks updated across devices.",
+            text = "Keep your schedule, notes, and task lists synchronized.",
             fontSize = 14.sp,
             color = Slate500,
-            textAlign = TextAlign.Center
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 16.dp)
         )
-        Spacer(modifier = Modifier.height(48.dp))
-        Button(
-            onClick = {
-                navController.navigate("main") {
-                    popUpTo("login") { inclusive = true }
-                }
-            },
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Email field
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email Address") },
+            singleLine = true,
             shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth().height(56.dp)
-        ) {
-            Text("Sign in with Google", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Password field
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+
+        if (isLoading) {
+            CircularProgressIndicator(color = Indigo600)
+            Spacer(modifier = Modifier.height(16.dp))
+        } else {
+            // Main Action Button (Login / Register)
+            Button(
+                onClick = {
+                    if (email.isBlank() || password.isBlank()) {
+                        Toast.makeText(context, "Please fill all fields", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    isLoading = true
+                    coroutineScope.launch {
+                        try {
+                            if (isRegistering) {
+                                auth.createUserWithEmailAndPassword(email, password)
+                            } else {
+                                auth.signInWithEmailAndPassword(email, password)
+                            }
+                            isLoading = false
+                            navController.navigate("main") {
+                                popUpTo("login") { inclusive = true }
+                            }
+                        } catch (e: Exception) {
+                            isLoading = false
+                            Toast.makeText(context, "Auth Failed: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            ) {
+                Text(
+                    text = if (isRegistering) "Register & Enter" else "Sign In",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Google Sign-In Button
+            Button(
+                onClick = {
+                    isLoading = true
+                    coroutineScope.launch {
+                        val success = authManager.signInWithGoogle()
+                        isLoading = false
+                        if (success) {
+                            navController.navigate("main") {
+                                popUpTo("login") { inclusive = true }
+                            }
+                        } else {
+                            Toast.makeText(context, "Google Sign-In failed or cancelled", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Slate200),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            ) {
+                Text(
+                    text = "Sign In with Google",
+                    color = Slate900,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Toggle Register/Login Mode
+            Text(
+                text = if (isRegistering) "Already have an account? Sign In" else "New to PlanIt? Create an Account",
+                color = Indigo500,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clickable { isRegistering = !isRegistering }
+                    .padding(8.dp)
+            )
         }
     }
 }
@@ -114,12 +261,7 @@ fun MainDashboardScreen(onSignOut: () -> Unit = {}) {
     val bottomNavController = rememberNavController()
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "home"
-
-    var showAddTaskDialog by remember { mutableStateOf(false) }
-    var showAddNoteDialog by remember { mutableStateOf(false) }
-    val viewModel: PlannerViewModel = viewModel()
-    
-    var selectedTask by remember { mutableStateOf<TaskEntity?>(null) }
+    val plannerViewModel: PlannerViewModel = viewModel()
 
     Scaffold(
         containerColor = AppBackground,
@@ -131,249 +273,43 @@ fun MainDashboardScreen(onSignOut: () -> Unit = {}) {
                     restoreState = true
                 }
             }
-        },
-        floatingActionButton = {
-            if (currentRoute == "home") {
-                FloatingActionButton(
-                    onClick = { showAddTaskDialog = true },
-                    containerColor = Indigo600,
-                    contentColor = Color.White,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.size(56.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add", modifier = Modifier.size(32.dp))
-                }
-            } else if (currentRoute == "notes") {
-                FloatingActionButton(
-                    onClick = { showAddNoteDialog = true },
-                    containerColor = Indigo600,
-                    contentColor = Color.White,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.size(56.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Note", modifier = Modifier.size(32.dp))
-                }
-            }
         }
     ) { innerPadding ->
         NavHost(
             navController = bottomNavController,
             startDestination = "home",
-            modifier = Modifier.padding(innerPadding).fillMaxSize()
-        ) {
-            composable("home") { 
-                PlannerScreen(
-                    viewModel = viewModel,
-                    onTaskClick = { task -> selectedTask = task }
-                ) 
-            }
-            composable("notes") { NotesScreen(viewModel = viewModel) }
-            composable("sync") { SyncScreen() }
-            composable("settings") { SettingsScreen(onSignOut = onSignOut) }
-        }
-    }
-
-    if (showAddTaskDialog) {
-        AddTaskDialog(
-            onDismiss = { showAddTaskDialog = false },
-            onAdd = { title, desc, isTimeBoxed, hour, minute ->
-                viewModel.addTask(title, desc, isTimeBoxed, hour, minute)
-                showAddTaskDialog = false
-            }
-        )
-    }
-
-    if (showAddNoteDialog) {
-        AddNoteDialog(
-            onDismiss = { showAddNoteDialog = false },
-            onAdd = { title, content ->
-                viewModel.addNote(title, content)
-                showAddNoteDialog = false
-            }
-        )
-    }
-
-    selectedTask?.let { task ->
-        TaskDetailDialog(
-            task = task, 
-            onDismiss = { selectedTask = null },
-            onDelete = {
-                viewModel.deleteTask(it)
-                selectedTask = null
-            }
-        )
-    }
-}
-
-@Composable
-fun PlannerScreen(viewModel: PlannerViewModel, onTaskClick: (TaskEntity) -> Unit) {
-    val floatingTasks by viewModel.floatingTasks.collectAsStateWithLifecycle()
-    val scheduleTasks by viewModel.scheduleTasks.collectAsStateWithLifecycle()
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-    ) {
-        TopBar()
-        
-        Column(
             modifier = Modifier
+                .padding(innerPadding)
                 .fillMaxSize()
-                .padding(horizontal = 24.dp)
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
-            FloatingTasksSection(floatingTasks, onTaskClick)
-            Spacer(modifier = Modifier.height(32.dp))
-            ScheduleSection(scheduleTasks, onTaskClick)
+            composable("home") { HomeScreen(plannerViewModel) }
+            composable("tasks") {
+                TasksScreen(
+                    viewModel = plannerViewModel,
+                    onNavigateToHome = { hour ->
+                        bottomNavController.navigate("home")
+                    }
+                )
+            }
+            composable("notes") { NotesScreen(plannerViewModel) }
+            composable("insights") { InsightsScreen(plannerViewModel) }
+            composable("settings") { SettingsScreen(onSignOut) }
         }
     }
 }
+
+
+
+
 
 @Composable
 fun PlaceholderScreen(title: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(64.dp), tint = Slate300)
+            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(64.dp), tint = Slate300)
             Spacer(modifier = Modifier.height(16.dp))
             Text(text = title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Slate900)
-            Text(text = "Coming Soon", fontSize = 14.sp, color = Slate500)
-        }
-    }
-}
-
-@Composable
-fun TopBar() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
-            .padding(top = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column {
-            Text(text = "Thursday", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = Slate900, letterSpacing = (-0.5).sp)
-            Text(text = "Oct 24, 2024", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Slate500)
-        }
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .border(2.dp, Color.White, CircleShape)
-                .background(Brush.linearGradient(listOf(Indigo400, Purple500))),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(text = "JD", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-fun FloatingTasksSection(tasks: List<TaskEntity>, onTaskClick: (TaskEntity) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text = "FLOATING TASKS", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Slate400, letterSpacing = 1.5.sp)
-            Box(
-                modifier = Modifier
-                    .background(Indigo100, RoundedCornerShape(percent = 50))
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
-            ) {
-                Text(text = "${tasks.size} PENDING", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Indigo700)
-            }
-        }
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            items(tasks) { task ->
-                Box(
-                    modifier = Modifier
-                        .width(140.dp)
-                        .background(White70, RoundedCornerShape(16.dp))
-                        .border(1.dp, White40, RoundedCornerShape(16.dp))
-                        .clickable { onTaskClick(task) }
-                        .padding(12.dp)
-                ) {
-                    Column {
-                        Text(text = task.title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Slate900, lineHeight = 16.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Indigo100, CircleShape)) {
-                            Box(modifier = Modifier.fillMaxWidth(0.5f).height(4.dp).background(Indigo500, CircleShape))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ScheduleSection(tasks: List<TaskEntity>, onTaskClick: (TaskEntity) -> Unit) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Text(text = "SCHEDULE", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Slate400, letterSpacing = 1.5.sp)
-        Spacer(modifier = Modifier.height(16.dp))
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(bottom = 100.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(tasks) { task ->
-                val timeFormat = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                val timeString = task.startTime?.let { timeFormat.format(java.util.Date(it)) } ?: "00:00"
-
-                ScheduleRow(time = timeString, isActive = true) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Indigo600, RoundedCornerShape(24.dp))
-                            .clickable { onTaskClick(task) }
-                            .padding(16.dp)
-                    ) {
-                        Column {
-                            Text(text = "APP TASK", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = White80, letterSpacing = (-0.5).sp)
-                            Text(text = task.title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                    }
-                }
-            }
-            item {
-                // Current time indicator
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                ) {
-                    Text(text = "12:45", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Indigo600, modifier = Modifier.width(40.dp), textAlign = TextAlign.End)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Indigo400)) {
-                        Box(modifier = Modifier.offset(y = (-4).dp).size(10.dp).background(Indigo600, CircleShape).border(2.dp, Color.White, CircleShape))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ScheduleRow(time: String, isActive: Boolean = false, opacity: Float = 1f, content: @Composable () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().alpha(opacity),
-        verticalAlignment = Alignment.Top
-    ) {
-        Text(
-            text = time,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            color = Slate400,
-            modifier = Modifier.width(40.dp).padding(top = 4.dp),
-            textAlign = TextAlign.End
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Box(modifier = Modifier.weight(1f)) {
-            content()
+            Text(text = "Ready to start implementation", fontSize = 14.sp, color = Slate500)
         }
     }
 }
@@ -382,17 +318,19 @@ fun ScheduleRow(time: String, isActive: Boolean = false, opacity: Float = 1f, co
 fun BottomNavBar(currentRoute: String, onNavigate: (String) -> Unit) {
     Row(
         modifier = Modifier
+            .navigationBarsPadding()
             .fillMaxWidth()
             .height(80.dp)
             .background(White90)
-            .border(1.dp, Slate100)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 8.dp)
+            .padding(bottom = 8.dp),
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.CenterVertically
     ) {
         NavBarItem("Planner", Icons.Default.Home, isActive = currentRoute == "home") { onNavigate("home") }
+        NavBarItem("Tasks", Icons.Default.CheckCircle, isActive = currentRoute == "tasks") { onNavigate("tasks") }
         NavBarItem("Notes", Icons.Default.Create, isActive = currentRoute == "notes") { onNavigate("notes") }
-        NavBarItem("Sync", Icons.Default.DateRange, isActive = currentRoute == "sync") { onNavigate("sync") }
+        NavBarItem("Insights", Icons.Default.Info, isActive = currentRoute == "insights") { onNavigate("insights") }
         NavBarItem("Settings", Icons.Default.Settings, isActive = currentRoute == "settings") { onNavigate("settings") }
     }
 }
@@ -420,150 +358,4 @@ fun NavBarItem(label: String, icon: ImageVector, isActive: Boolean = false, onCl
         Spacer(modifier = Modifier.height(4.dp))
         Text(text = label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isActive) Indigo700 else Slate900)
     }
-}
-
-@Composable
-fun AddTaskDialog(
-    onDismiss: () -> Unit,
-    onAdd: (String, String, Boolean, Int, Int) -> Unit
-) {
-    var title by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
-    var isTimeBoxed by remember { mutableStateOf(false) }
-    var hour by remember { mutableStateOf("09") }
-    var minute by remember { mutableStateOf("00") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add Task") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Task Title") },
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    label = { Text("Description") },
-                    minLines = 2,
-                    maxLines = 4
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = isTimeBoxed, onCheckedChange = { isTimeBoxed = it })
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Time-Boxed")
-                }
-                if (isTimeBoxed) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = hour,
-                            onValueChange = { hour = it },
-                            label = { Text("HH") },
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                        OutlinedTextField(
-                            value = minute,
-                            onValueChange = { minute = it },
-                            label = { Text("MM") },
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    onAdd(title, description, isTimeBoxed, hour.toIntOrNull() ?: 9, minute.toIntOrNull() ?: 0)
-                }
-            ) {
-                Text("Add")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
-}
-
-@Composable
-fun TaskDetailDialog(task: TaskEntity, onDismiss: () -> Unit, onDelete: (TaskEntity) -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(task.title, fontWeight = FontWeight.Bold) },
-        text = {
-            Column {
-                if (task.isTimeBoxed) {
-                    val timeFormat = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                    val timeString = task.startTime?.let { timeFormat.format(java.util.Date(it)) } ?: ""
-                    Text("Time: $timeString", fontWeight = FontWeight.SemiBold, color = Indigo600)
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                Text(
-                    text = task.description?.takeIf { it.isNotBlank() } ?: "No description provided.",
-                    color = Slate800
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = { onDelete(task) }) {
-                Text("Delete", color = Color.Red)
-            }
-        }
-    )
-}
-
-@Composable
-fun AddNoteDialog(
-    onDismiss: () -> Unit,
-    onAdd: (String, String) -> Unit
-) {
-    var title by remember { mutableStateOf("") }
-    var content by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add Note") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Note Title") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = content,
-                    onValueChange = { content = it },
-                    label = { Text("Content") },
-                    minLines = 3,
-                    maxLines = 5,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onAdd(title, content) }) {
-                Text("Add")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
 }

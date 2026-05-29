@@ -6,6 +6,7 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "tasks")
 data class TaskEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val userId: String = "",
     val title: String,
     val description: String?,
     val date: Long, // Epoch milliseconds representing the date

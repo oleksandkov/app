@@ -11,15 +11,32 @@ import com.example.data.local.entity.CategoryEntity
 import com.example.data.local.entity.NoteEntity
 import com.example.data.local.entity.TaskEntity
 
+import com.example.data.local.dao.SubTaskDao
+import com.example.data.local.entity.SubTaskEntity
+import com.example.data.local.dao.UserStatsDao
+import com.example.data.local.entity.UserStatsEntity
+import com.example.data.local.dao.PresetDao
+import com.example.data.local.entity.PresetEntity
+
 @Database(
-    entities = [TaskEntity::class, NoteEntity::class, CategoryEntity::class],
-    version = 1,
+    entities = [
+        TaskEntity::class, 
+        NoteEntity::class, 
+        CategoryEntity::class, 
+        SubTaskEntity::class,
+        UserStatsEntity::class,
+        PresetEntity::class
+    ],
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun taskDao(): TaskDao
     abstract fun noteDao(): NoteDao
     abstract fun categoryDao(): CategoryDao
+    abstract fun subTaskDao(): SubTaskDao
+    abstract fun userStatsDao(): UserStatsDao
+    abstract fun presetDao(): PresetDao
 
     companion object {
         @Volatile
@@ -31,7 +48,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "planner_db"
-                ).build()
+                )
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }
