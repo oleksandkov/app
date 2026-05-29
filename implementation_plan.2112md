@@ -1,0 +1,498 @@
+# Planner Pro — Implementation Plan
+
+Based on [implementation.prompt.md](file:///c:/Github/app/implementation.prompt.md), covering the full existing codebase analysis.
+
+---
+
+## Current Architecture Summary
+
+| Layer | Key Files |
+|---|---|
+| **Auth** | [AuthManager.kt](file:///c:/Github/app/app/src/main/java/com/example/auth/AuthManager.kt), [AuthViewModel.kt](file:///c:/Github/app/app/src/main/java/com/example/auth/AuthViewModel.kt) — Firebase Auth + Google Sign-In |
+| **Data (Local)** | [AppDatabase.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/AppDatabase.kt) — Room DB v5 with `tasks`, `notes`, `categories`, `subtasks` tables |
+| **Data (Remote)** | [FirestoreDataSource.kt](file:///c:/Github/app/app/src/main/java/com/example/data/network/FirestoreDataSource.kt) — Skeleton only, unused |
+| **Calendar** | [CalendarRepository.kt](file:///c:/Github/app/app/src/main/java/com/example/data/repository/CalendarRepository.kt), [CalendarSyncViewModel.kt](file:///c:/Github/app/app/src/main/java/com/example/calendar/CalendarSyncViewModel.kt) — Google Calendar REST API |
+| **UI** | [MainActivity.kt](file:///c:/Github/app/app/src/main/java/com/example/MainActivity.kt) (~2439 lines), [OtherScreens.kt](file:///c:/Github/app/app/src/main/java/com/example/OtherScreens.kt) (~1752 lines), [PlanScreen.kt](file:///c:/Github/app/app/src/main/java/com/example/PlanScreen.kt) |
+| **Notifications** | [NotificationHelper.kt](file:///c:/Github/app/app/src/main/java/com/example/notification/NotificationHelper.kt), [PlanNotificationManager.kt](file:///c:/Github/app/app/src/main/java/com/example/notification/PlanNotificationManager.kt) |
+| **Settings** | [SettingsViewModel.kt](file:///c:/Github/app/app/src/main/java/com/example/settings/SettingsViewModel.kt), [UserPreferencesRepository.kt](file:///c:/Github/app/app/src/main/java/com/example/settings/UserPreferencesRepository.kt) — DataStore |
+
+> [!IMPORTANT]
+> The local Room database currently has **no user association** — all data is global on the device. This is the root cause of bug #1.
+
+## Resolved Decisions
+
+| Question | Answer |
+|---|---|
+| Guest mode | **Removed.** Users must sign in. No offline guest access. |
+| Data migration | **Destructive.** Fresh DB (version 6), no migration of old data. |
+| Presets | Full snapshot: all plans + subtasks + today's tasks. Date-independent template applied to any day. |
+| "Trainers" | Actually means **alarm clock management** — creating/managing morning alarms from the app. |
+| Smart band | **Xiaomi Smart Band 9 Pro** — notification mirroring via Mi Fitness. |
+| Markdown | Full Markdown rendering + keep quick task `[ ] ` creation shortcut. |
+| Note widget | Opens notes page with empty note + shows today's notes list. |
+| Export | Standard Android share sheet. |
+| XP values | Task = 10 XP, note = 5 XP, streak = 20 XP, plan = 5 XP. |
+| App icon | Minimalistic, stylish, Indigo-branded. |
+| Priority | Phase 1→2→4→3→6→5→7→8 |
+
+---
+
+## Phase 1 — Bug Fixes
+
+### 1.1 Link data to the current account
+
+**Problem:** Room DB stores all tasks/notes/subtasks without a `userId` column. Guest mode users share the same data as signed-in users.
+
+**Proposed Changes:**
+
+#### [MODIFY] [TaskEntity.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/entity/TaskEntity.kt)
+- Add `val userId: String = ""` column
+
+#### [MODIFY] [NoteEntity.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/entity/NoteEntity.kt)
+- Add `val userId: String = ""` column
+
+#### [MODIFY] [SubTaskEntity.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/entity/SubTaskEntity.kt)
+- Add `val userId: String = ""` column
+
+#### [MODIFY] [TaskDao.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/dao/TaskDao.kt)
+- Update all queries to filter by `userId`
+
+#### [MODIFY] [NoteDao.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/dao/NoteDao.kt)
+- Update all queries to filter by `userId`
+
+#### [MODIFY] [SubTaskDao.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/dao/SubTaskDao.kt)
+- Update all queries to filter by `userId`
+
+#### [MODIFY] [AppDatabase.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/AppDatabase.kt)
+- Bump database version to 6, add migration or `fallbackToDestructiveMigration()`
+
+#### [MODIFY] [PlannerViewModel.kt](file:///c:/Github/app/app/src/main/java/com/example/PlannerViewModel.kt)
+- Pass current `FirebaseAuth.currentUser?.uid ?: "guest"` to all DAO calls
+
+#### [MODIFY] [NotesViewModel.kt](file:///c:/Github/app/app/src/main/java/com/example/notes/NotesViewModel.kt)
+- Same userId filtering
+
+---
+
+### 1.2 Logout → redirect to login
+
+**Problem:** `onSignOut` callback exists but only calls `settingsViewModel.signOut(onSignOut)`. The auth state is not observed at the top level to force navigation when it becomes `Idle`.
+
+#### [MODIFY] [MainActivity.kt](file:///c:/Github/app/app/src/main/java/com/example/MainActivity.kt) — `MainAppNavigation`
+- Add a `LaunchedEffect` that observes `authViewModel.authState` — when it transitions to `Idle`, navigate to `"login"` and pop the entire backstack
+- **Remove** the guest-mode "Continue Offline" button entirely
+- Prevent navigation to `"main"` route without authentication
+
+---
+
+### 1.3 Plan page: tasks and plan blanks must look visually different
+
+**Problem:** In [PlanScreen.kt](file:///c:/Github/app/app/src/main/java/com/example/PlanScreen.kt), both `PlanTaskCard` and `SubTaskPlanCard` use the same `GlassCard` appearance.
+
+#### [MODIFY] [PlanScreen.kt](file:///c:/Github/app/app/src/main/java/com/example/PlanScreen.kt)
+- `PlanTaskCard` for time-boxed plans: add a colored left border or gradient accent (Indigo for local plans, Teal for calendar-synced, Coral for meetings)
+- Floating/all-time tasks: keep current `GlassCard` but with a subtle different tint
+- `SubTaskPlanCard`: use an indented card style with a connecting line to visually subordinate them
+
+---
+
+### 1.4 Plan page: no direct editing — single-click redirect and highlight
+
+**Problem:** `PlanTaskCard` currently has an inline `Checkbox` for completion toggle AND edit/delete `IconButton`s. The prompt says users should not directly edit plans or subtasks on the plan page — only tasks for today/all time. 
+
+#### [MODIFY] [PlanScreen.kt](file:///c:/Github/app/app/src/main/java/com/example/PlanScreen.kt)
+- For **time-boxed plans**: remove the inline `Checkbox` and `Edit`/`Delete` buttons. Keep only the completion toggle (checkbox) for today's tasks.
+- Clicking any plan card, subtask card, or today's task card once → redirect to the home page timeline and highlight it (pulsing glow border for 4 seconds) to show where it fits in the daily schedule.
+- Edit/delete should only be reachable from double-click or the home screen timeline clicks.
+
+---
+
+### 1.5 Double-click on plan/subtask → open edit window
+
+#### [MODIFY] [PlanScreen.kt](file:///c:/Github/app/app/src/main/java/com/example/PlanScreen.kt)
+- Add `onDoubleClick` via `combinedClickable` to `GlassCard` wrapper.
+- On plans/tasks: double-clicking opens `AddTaskDialog` in edit mode.
+- On subtasks: double-clicking resolves the parent plan and opens the parent's edit dialog.
+
+---
+
+## Phase 2 — UI/UX Improvements
+
+### 2.1 Change the app icon
+
+#### [MODIFY] [ic_launcher_foreground.xml](file:///c:/Github/app/app/src/main/res/drawable/ic_launcher_foreground.xml)
+- Replace the default Android robot with a custom planner/calendar icon vector
+
+#### [MODIFY] [ic_launcher_background.xml](file:///c:/Github/app/app/src/main/res/drawable/ic_launcher_background.xml)
+- Change background from `#3DDC84` (Android green) to an Indigo gradient matching the app brand
+
+---
+
+### 2.2 Redesign note creation dialog — larger content area
+
+#### [MODIFY] [OtherScreens.kt](file:///c:/Github/app/app/src/main/java/com/example/OtherScreens.kt) — `DetailedAddNoteDialog` and `DetailedEditNoteDialog`
+- Make the content `OutlinedTextField` use `minLines = 8` and `modifier = Modifier.weight(1f)` to fill available space
+- Move the title field and option rows into a collapsible section so the content area dominates
+- Use a full-screen dialog instead of the current popup dialog
+
+---
+
+### 2.3 Consistent colors per item type
+
+Define a clear color system applied everywhere (home timeline, plan page, notes):
+
+| Item Type | Color | Current |
+|---|---|---|
+| Today's tasks (floating) | **Indigo** (`Indigo600`) | ✅ Already used |
+| Subtask (plan not synced with calendar) | **Purple** (`Purple500`) | ❌ Currently same as tasks |
+| Subtask (plan synced with calendar) | **Teal** (`Teal600`) | ❌ Not distinguished |
+| Meetings | **Coral** (`Coral500`) | ✅ Partially, via `isMeeting` |
+
+#### [MODIFY] [Color.kt](file:///c:/Github/app/app/src/main/java/com/example/ui/theme/Color.kt)
+- Add `SubTaskUnsyncedColor`, `SubTaskSyncedColor` named aliases
+
+#### [MODIFY] [MainActivity.kt](file:///c:/Github/app/app/src/main/java/com/example/MainActivity.kt) — Timeline cards
+- Use the color system for all timeline item backgrounds
+
+#### [MODIFY] [PlanScreen.kt](file:///c:/Github/app/app/src/main/java/com/example/PlanScreen.kt) — Task cards
+- Apply consistent accent colors
+
+---
+
+### 2.4 Remove notes from the middle of the day timeline
+
+**Problem:** `NoteTimelineItem` is currently inserted into the timeline. The prompt says notes should NOT appear in the timeline — instead show note shortcuts on the home page.
+
+#### [MODIFY] [MainActivity.kt](file:///c:/Github/app/app/src/main/java/com/example/MainActivity.kt) — `PlannerScreen`
+- Remove `todaysNotes` from `timelineItems` assembly
+- Add a "Today's Notes" shortcut strip above or below the `UpcomingPlansSection` — small compact chips linking to each note
+
+---
+
+### 2.5 Presets system
+
+#### [NEW] `PresetEntity.kt` — `com.example.data.local.entity`
+- Fields: `id`, `userId`, `name`, `createdAt`, `scheduleJson` (serialized list of tasks), `includeFloatingTasks: Boolean`
+
+#### [NEW] `PresetDao.kt` — `com.example.data.local.dao`
+- CRUD operations for presets
+
+#### [MODIFY] [AppDatabase.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/AppDatabase.kt)
+- Add `PresetEntity` to entities, bump version
+
+#### [MODIFY] [PlannerViewModel.kt](file:///c:/Github/app/app/src/main/java/com/example/PlannerViewModel.kt)
+- `createPreset()` — snapshot current day's schedule into a preset
+- `applyPreset(preset)` — restore tasks from preset to selected date
+
+#### [MODIFY] [MainActivity.kt](file:///c:/Github/app/app/src/main/java/com/example/MainActivity.kt) — Home FAB
+- Replace or augment the FAB with a menu: "Add Task", "Create Preset", "Use Preset"
+
+---
+
+## Phase 3 — Features
+
+### 3.1 Markdown support for notes
+
+#### [MODIFY] [OtherScreens.kt](file:///c:/Github/app/app/src/main/java/com/example/OtherScreens.kt) — `NoteContentWithChecklist`
+- Replace the current custom checklist parser with a proper Markdown renderer
+- Use a library like `compose-markdown` or build a lightweight parser for: headers, bold, italic, lists, checkboxes, code blocks
+- The current `[ ] ` / `[x] ` checklist syntax is already close to Markdown task lists
+
+---
+
+### 3.2 Widget for creating notes
+
+#### [NEW] `NoteWidgetProvider.kt` — `com.example.widget`
+- An `AppWidgetProvider` with a simple button that launches the note creation flow
+- Widget XML layout definition
+
+#### [NEW] `res/xml/note_widget_info.xml`
+
+#### [MODIFY] [AndroidManifest.xml](file:///c:/Github/app/app/src/main/AndroidManifest.xml)
+- Register the widget receiver
+
+---
+
+### 3.3 Export notes as MD file
+
+#### [MODIFY] [OtherScreens.kt](file:///c:/Github/app/app/src/main/java/com/example/OtherScreens.kt) — `NoteCard`
+- Add a "Share/Export" button
+- Use Android `Intent.ACTION_SEND` with `text/markdown` MIME type
+- Write note content to a temporary `.md` file and share via `FileProvider`
+
+#### [MODIFY] [AndroidManifest.xml](file:///c:/Github/app/app/src/main/AndroidManifest.xml)
+- Add `FileProvider` for sharing files
+
+---
+
+## Phase 4 — Settings Page Enhancements
+
+### 4.1 Notification controls (master + individual)
+
+The settings page already has several notification toggles. Need to add:
+
+#### [MODIFY] [UserPreferencesRepository.kt](file:///c:/Github/app/app/src/main/java/com/example/settings/UserPreferencesRepository.kt)
+- Add keys: `task_reminder_notifications`, `note_reminder_notifications`, `plan_transition_notifications`, `calendar_event_notifications`
+
+#### [MODIFY] [SettingsViewModel.kt](file:///c:/Github/app/app/src/main/java/com/example/settings/SettingsViewModel.kt)
+- Expose new individual notification toggle flows
+
+#### [MODIFY] [OtherScreens.kt](file:///c:/Github/app/app/src/main/java/com/example/OtherScreens.kt) — `SettingsScreen`
+- Add individual toggle switches under the master "Enable App Reminders" switch
+- When master is off, disable all children
+
+---
+
+### 4.2 Google Calendar integration controls
+
+Currently there's a single `calendarSyncEnabled` toggle. Need to add:
+
+#### [MODIFY] [UserPreferencesRepository.kt](file:///c:/Github/app/app/src/main/java/com/example/settings/UserPreferencesRepository.kt)
+- Add: `auto_push_plans_to_calendar` (default **false**), `sync_calendar_to_app`, `push_on_swipe_confirm`
+
+#### [MODIFY] [OtherScreens.kt](file:///c:/Github/app/app/src/main/java/com/example/OtherScreens.kt) — `SettingsScreen`
+- Expand the calendar section with sub-toggles
+- By default, plans should NOT auto-push to calendar (opt-in)
+
+#### [MODIFY] [MainActivity.kt](file:///c:/Github/app/app/src/main/java/com/example/MainActivity.kt) — Swipe-to-push
+- If auto-push is off, swipe right on a plan card shows a confirmation dialog before pushing
+
+---
+
+### 4.3 Theme controls
+
+Already implemented with LIGHT/DARK/SYSTEM toggle. ✅ No changes needed.
+
+---
+
+### 4.4 Sound & volume controls
+
+Already implemented with melody picker and volume slider. ✅ No changes needed.
+
+---
+
+### 4.5 Reminder editing
+
+#### [MODIFY] [OtherScreens.kt](file:///c:/Github/app/app/src/main/java/com/example/OtherScreens.kt) — `SettingsScreen`
+- Add a "Default Reminder" section where users can set:
+  - Default reminder time (15m, 30m, 1h before)
+  - Default reminder for different item types
+
+---
+
+## Phase 5 — Gamification
+
+### 5.1 XP and progression system
+
+#### [NEW] `GamificationEntity.kt` — `com.example.data.local.entity`
+- `userId`, `totalXp`, `level`, `tasksCompleted`, `notesCreated`, `streakDays`, `lastActiveDate`
+
+#### [NEW] `GamificationDao.kt` — `com.example.data.local.dao`
+
+#### [NEW] `GamificationViewModel.kt` — `com.example.gamification`
+- XP rules: task completion = 10 XP, note creation = 5 XP, daily streak bonus = 20 XP
+- Level calculation: `level = sqrt(totalXp / 100)`
+
+#### [MODIFY] [AppDatabase.kt](file:///c:/Github/app/app/src/main/java/com/example/data/local/AppDatabase.kt)
+- Add `GamificationEntity`
+
+#### [MODIFY] [PlannerViewModel.kt](file:///c:/Github/app/app/src/main/java/com/example/PlannerViewModel.kt)
+- Award XP on task completion, note creation
+
+---
+
+### 5.2 Insights page with gamification display
+
+#### [MODIFY] [OtherScreens.kt](file:///c:/Github/app/app/src/main/java/com/example/OtherScreens.kt) — `SyncScreen` (renamed to "Insights")
+- Add level badge, XP progress bar with animations
+- Show streak counter with flame emoji
+- Animated confetti on level-up
+
+---
+
+## Phase 6 — Notifications Enhancements
+
+### 6.1 Plan time-up notification with "Done" button
+
+#### [MODIFY] [NotificationHelper.kt](file:///c:/Github/app/app/src/main/java/com/example/notification/NotificationHelper.kt)
+- Add a "Done" action button to the sticky notification using `addAction()`
+- Create a `BroadcastReceiver` to handle the "Done" action — marks the task as completed
+
+#### [NEW] `NotificationActionReceiver.kt` — `com.example.notification`
+- Handles "Mark as Done" intent
+- Updates the task in the database
+
+#### [MODIFY] [AndroidManifest.xml](file:///c:/Github/app/app/src/main/AndroidManifest.xml)
+- Register the receiver
+
+---
+
+### 6.2 Next action in notification
+
+#### [MODIFY] [PlanNotificationManager.kt](file:///c:/Github/app/app/src/main/java/com/example/notification/PlanNotificationManager.kt)
+- When showing the sticky notification for the current plan, also compute the **next** plan and display it as the notification's `setSubText()` or in expanded content
+
+---
+
+## Phase 7 — Data Storage (Cloud Sync)
+
+### How it works — detailed design
+
+The app uses **Room** (local SQLite) as the primary data store and **Firestore** as the cloud backup. The sync is **bi-directional**: changes made on the device push to Firestore, and when a user signs in on a new device, data is pulled from Firestore.
+
+**Firestore document structure:**
+```
+users/
+  {userId}/
+    tasks/
+      {taskId} → { title, description, date, startTime, endTime, isTimeBoxed, isCompleted, ... , updatedAt, deletedAt }
+    notes/
+      {noteId} → { title, content, categoryId, linkedDate, ... , updatedAt, deletedAt }
+    subtasks/
+      {subtaskId} → { parentIdStr, title, startTime, endTime, isCompleted, updatedAt, deletedAt }
+    presets/
+      {presetId} → { name, scheduleJson, createdAt, updatedAt }
+    gamification/
+      stats → { totalXp, level, tasksCompleted, notesCreated, streakDays, lastActiveDate }
+    sync_metadata/
+      info → { lastSyncTimestamp }
+```
+
+**Sync flow:**
+
+```mermaid
+sequenceDiagram
+    participant App as Room (Local)
+    participant SM as SyncManager
+    participant FS as Firestore (Cloud)
+    
+    Note over SM: Triggered on: app launch, task/note change, manual sync
+    SM->>App: Get all items where updatedAt > lastSyncTimestamp
+    SM->>FS: Get all items where updatedAt > lastSyncTimestamp
+    SM->>SM: Merge using last-write-wins (compare updatedAt)
+    SM->>App: Upsert merged items locally
+    SM->>FS: Upsert merged items to cloud
+    SM->>App: Update lastSyncTimestamp
+```
+
+**Conflict resolution — last-write-wins:**
+- Every entity gets `updatedAt: Long` (epoch ms) set on every local change
+- On sync, for each entity ID that exists both locally and in Firestore:
+  - If local `updatedAt` > cloud `updatedAt` → push local to cloud
+  - If cloud `updatedAt` > local `updatedAt` → pull cloud to local
+  - If equal → no action
+- Soft deletes: instead of removing rows, set `deletedAt` timestamp. During sync, a delete propagates to the other side.
+
+**When sync happens:**
+1. **On app launch** — full sync after authentication succeeds
+2. **On data change** — debounced (wait 2 seconds after last change, then push)
+3. **Manual** — "Force Sync" button on settings page
+4. **Background** — periodic WorkManager job every 15 minutes
+
+### 7.1 Entity changes
+
+#### [MODIFY] All entity files (`TaskEntity`, `NoteEntity`, `SubTaskEntity`, `PresetEntity`, `GamificationEntity`)
+- Add `val updatedAt: Long = System.currentTimeMillis()`
+- Add `val deletedAt: Long? = null` (soft delete)
+- Add `val firebaseId: String? = null` (Firestore document ID for mapping)
+
+### 7.2 Firestore data source
+
+#### [MODIFY] [FirestoreDataSource.kt](file:///c:/Github/app/app/src/main/java/com/example/data/network/FirestoreDataSource.kt)
+- Implement per-collection CRUD:
+  - `pushTasks(userId, tasks)` — batch write changed tasks
+  - `pullTasks(userId, since: Long): List<TaskMap>` — query where `updatedAt > since`
+  - Same pattern for notes, subtasks, presets, gamification
+- Use Firestore `WriteBatch` for atomic multi-document writes
+- Use `.whereGreaterThan("updatedAt", lastSyncTimestamp)` for incremental pulls
+
+### 7.3 Sync manager
+
+#### [NEW] `SyncManager.kt` — `com.example.data.repository`
+- `suspend fun fullSync(userId: String)` — called on login and manual sync
+- `suspend fun pushChanges(userId: String)` — called after local data changes (debounced)
+- `suspend fun pullChanges(userId: String)` — called on app resume
+- Stores `lastSyncTimestamp` in DataStore via `UserPreferencesRepository`
+- Handles offline gracefully: if Firestore is unreachable, changes queue locally and sync on next connectivity
+
+### 7.4 Background sync worker
+
+#### [NEW] `SyncWorker.kt` — `com.example.data.repository`
+- `CoroutineWorker` scheduled via `PeriodicWorkRequest` every 15 minutes
+- Calls `SyncManager.fullSync()` if user is authenticated
+
+---
+
+## Phase 8 — Integrations
+
+### 8.1 Alarm clock management ("Trainers")
+
+Android provides `AlarmClock` intents to create system alarms programmatically. However, **reading/listing existing alarms is NOT possible** — there's no public API for that. What we CAN do:
+
+- **Create alarms** from the app using `Intent.ACTION_SET_ALARM`
+- **Schedule internal "alarm-like" reminders** using `AlarmManager` + full-screen notifications
+- **Store alarm presets** in the app's own database ("Morning routine at 6:00", "Evening review at 21:00")
+
+> [!WARNING]
+> We cannot read or modify alarms set by other alarm clock apps. We can only create new ones via system intents.
+
+#### [NEW] `AlarmPresetEntity.kt` — `com.example.data.local.entity`
+- `id`, `userId`, `name`, `hour`, `minute`, `daysOfWeek` (bitmask), `isEnabled`, `linkedTaskTitle`
+
+#### [NEW] `AlarmManager.kt` — `com.example.integrations`
+- `createSystemAlarm(hour, minute, label)` — uses `Intent.ACTION_SET_ALARM`
+- `scheduleInternalAlarm(preset)` — uses `AlarmManager.setAlarmClock()` for reliable wake-up
+
+#### [MODIFY] [MainActivity.kt](file:///c:/Github/app/app/src/main/java/com/example/MainActivity.kt) — Home page
+- Add "Alarms" option in the home page overflow/menu (compact, not taking much space)
+- Shows list of alarm presets with toggle switches
+
+#### [MODIFY] [AndroidManifest.xml](file:///c:/Github/app/app/src/main/AndroidManifest.xml)
+- Add `SCHEDULE_EXACT_ALARM` permission for Android 12+
+- Add `USE_EXACT_ALARM` permission for Android 14+
+
+---
+
+### 8.2 Xiaomi Smart Band 9 Pro
+
+Xiaomi does **not** provide a public SDK for third-party apps. However, the Smart Band 9 Pro automatically **mirrors all Android notifications** via the **Mi Fitness** (formerly Zepp Life) companion app.
+
+**What we need to do to ensure good band experience:**
+
+#### [MODIFY] [NotificationHelper.kt](file:///c:/Github/app/app/src/main/java/com/example/notification/NotificationHelper.kt)
+- Ensure notifications use `NotificationCompat.Builder` with:
+  - Clear, short `contentTitle` (band displays ~20 chars)
+  - Meaningful `contentText` (band shows first line)
+  - Proper `category` hints (`CATEGORY_REMINDER`, `CATEGORY_EVENT`)
+  - `setVisibility(VISIBILITY_PUBLIC)` so content shows on band
+- The "Done" action button (Phase 6) will appear as a tappable action on the band
+
+#### [MODIFY] [PlannerProApplication.kt](file:///c:/Github/app/app/src/main/java/com/example/PlannerProApplication.kt)
+- Create notification channels with proper importance levels so Mi Fitness correctly categorizes them
+
+> [!NOTE]
+> No special SDK integration needed. As long as notifications are properly formatted and the user has Mi Fitness installed with notification access enabled, they will appear on the Smart Band 9 Pro automatically.
+
+---
+
+## All Questions Resolved ✅
+
+All open questions have been answered — see "Resolved Decisions" table at top of document.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- Fix the broken `GreetingScreenshotTest.kt` (references non-existent `Greeting` composable)
+- Add unit tests for `PlannerViewModel` userId filtering
+- Add unit tests for preset create/apply logic
+- Add unit tests for gamification XP calculation
+- Build verification: `./gradlew assembleDebug` with `JAVA_HOME` set to Android Studio JBR
+
+### Manual Verification
+- Test login → data isolation → logout → redirect flow
+- Verify Plan page visual differentiation
+- Test preset create/restore cycle
+- Test note export via share sheet
+- Verify notification "Done" button marks task complete
